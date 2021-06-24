@@ -2,10 +2,15 @@
 data analysis using R 
 
 In This Project I Preformed 3-parts of data analysis 
+
+
 Part 1 - 
 Exploration of 2 data sets. 
+
 1.The level of concern between the citizens of the USA during the covid outbreak
-2. Covid Cases In the USA during the covid outbreak
+
+2.Covid Cases In the USA during the covid outbreak
+
 it contains cleaning the data and visualize it. 
 
 Part 2 - 
