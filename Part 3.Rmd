@@ -1,0 +1,508 @@
+---
+title: "Final Project - Part 3"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+# General-purpose data wrangling
+library(tidyverse)  
+library(reshape2)
+library(ggplot2)
+# Eases DateTime manipulation
+library(lubridate)
+library(data.table)
+#to read csv files
+library(readr)
+library(grid)
+#arrange the plots
+library(gridExtra)
+#word cloud plot 
+library(wordcloud)
+# qualitative data analysis package (it masks %>%)
+library(gtools) 
+library(qdap) 
+# framework for text mining; it loads NLP package
+library(tm) 
+library(SnowballC); library(rJava);
+#packages for data cleaning
+library(tidytext)
+library(textdata)
+library(quanteda)
+
+library(dplyr)
+library(rvest)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+library(tidyverse)
+ 
+library(mapproj)
+library(maps)
+require(ggplot2)
+
+```
+
+### Research question - How did Trump Influenced U.S. Citizens' Perceptions of covid's Severity?
+
+As we all know at the beginning of the pandemic trump was not concerned about covid's severity, Even after he himself was Infected by the disease.
+we decided to explore his influence on the US citizens opinion on covid.
+In the last two parts of the project we saw that most of trumps tweets was positive or neutral even when the disease really started to spread all over the US and Began to claim victims - what can imply that he wasnt taking this disease as a big issue.
+we decided to explore his influence on the citizens of the US by exploring his tweets and his behavior during te pandemic.
+
+lets take a look at trump tweets histogram:
+
+```{r}
+
+#read the trump tweets rds and clean it
+tweets <- readRDS(here::here("data","trump.rds"))
+
+#seperate the time and date from the date column 
+tweets$Time <-format(as.POSIXct(tweets$date), format = "%H:%M:%S") 
+tweets$date <- as.Date(tweets$date)
+
+#change the retweets column to numeric 
+tweets$retweets <- as.numeric(tweets$retweets)
+tweets$favorites <- as.numeric(tweets$favorites)
+#change na values to 0's 
+tweets[is.na(tweets)] <- 0
+
+
+## clean the text column
+# remove \n
+tweets$text <- gsub("\n", " ", tweets$text )
+
+# remove url links
+tweets$text <- gsub("http.*","",tweets$text)
+
+# remove dots
+tweets$text <-gsub("\\.", "", tweets$text)
+
+# remove ’
+tweets$text <-gsub("\\’", "", tweets$text)
+
+# remove Punctuation: One of !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
+tweets$text <-gsub("[^A-Za-z0-9]", " ", tweets$text)
+
+# replace double spaces with single space
+tweets$text <- str_replace_all(tweets$text, "  ", " ") 
+
+# all small letters
+tweets$text <- tolower(tweets$text)
+
+# remove numbers
+tweets$text <- tm::removeNumbers(tweets$text)
+
+# remove stop words
+tweets$text <- tm::removeWords(x = tweets$text, stopwords("english"))
+
+tweets$text <- tm::removeWords(x = tweets$text, c("rt","joe","amp","whitehouse","just","can","get","s","pm","will","realdonaldtrump"))
+
+#count the number of tweets of each day 
+f1<- tweets %>% count(Date = as.Date(date))
+
+barplot(height=f1$n, names=f1$Date, main="Number of Trump's tweets per day", col="#dd6170", horiz=F ,las=2,font.axis=1, col.axis="#2166ac", cex.axis=1, border=NA)
+```
+
+we can see that the amount increases as the time passes and there is a significantly increasment around the 19/03/2020.
+after doing a little research about what happened around those dates that made trump increase his tweets frequency.
+we found that since March 1th Trump made a lot of tweets about unproven therapies and mentioned these therapies in White House briefings.
+These tweets had an impression reach of 300% above Trump's average.
+
+we decided to search those words in our tweets dataset :
+
+```{r}
+therapies <- c("hydroxychloroquine", "chloroquine", "azithromycin", "remdesivir", "covid", "treatment")
+
+th_tweets<-tweets%>%filter(grepl(paste(therapies, collapse="|"), text ))
+th_tweets<- th_tweets%>%filter(date>"2020-03-19")
+NROW(th_tweets)
+```
+
+we can see that there are 61 tweets in our data that consists with the therapies trump is suggesting for covid.
+In order to see the influence those tweets had on the citizens of the US we explored the number of google searches in the US made for those words in the same period of time:
+
+```{r}
+google_search <- read.csv("C:/Users/danan/OneDrive/desktop/finalprog/Final by parts/covid-treatment-google-search.csv")
+
+#changing the date from character to Date type
+google_search$date<-as.Date(google_search$date,format="%d/%m/%Y" )
+
+```
+
+```{r}
+#reshape the data frame for the plot
+df <- reshape2::melt(google_search ,  id.vars = 'date', variable.name = 'word')
+ggplot(df, aes(date,value)) + geom_line(aes(colour = word),size=1)+labs(title = "The Amount of google searches made in the USA")
+```
+
+*Explanation: We set the data column to be of date data type.\
+its very clear to see that around the same dates that trump tweeted about those therapies\
+the amount of searches increased significantly.\
+which means the citizens of the US were very affected by those tweets.*
+
+[**Guidelines:**]{.ul}
+
+Our guidelines in this part is that trump didnt consider covid as dangerous or as harmful as it was.
+we want to see if trump's followers were influenced by his beliefs.
+\
+Our assumption is that those who support Trump will also underestimate the severity of the covid and as a result we will see a number of things: \
+1
+. Trump-supporting states will have a greater number of confirmed patients
+.\
+2. Trump-supporting states will be under less quarantines and have a greater number of confirmed patients during those quarantines
+.
+\
+3. Trump-supporting states will have less vaccinated people.\
+*\*\*note - Trump-supporting state is a state which has a majority of republicans based on our Election result data set.\
+*\
+In order to check our assumption we will use 4 datasets- \
+1.Election result \
+2.Covid Cases \
+3.Quarantine dates in US states\
+4.Vaccination progress in US states \
+\
+- Read the data set of the election results of 2020 and clean it:
+
+```{r}
+web <- read_html("https://en.wikipedia.org/wiki/Political_party_strength_in_U.S._states")
+
+data <- html_nodes(web,".wikitable")
+electoin_result <- html_table(data[[2]],header = T)
+
+states <- c("AL" ,"AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY")
+
+electoin_result[5] = states
+#select the needed columns
+electoin_result <- electoin_result %>% select("State","State House", "2020 presidentialelection")
+#rename the columns to our convenience
+electoin_result <- electoin_result%>%rename("state_name" = "State")
+electoin_result <- electoin_result%>%rename("state" = "State House")
+
+#setting the political party column to be with only 2 values Democratic/Republican
+electoin_result$`2020 presidentialelection`[electoin_result$`2020 presidentialelection`== 'Democratic/ Republican (2nd District)'] <- 'Democratic'
+electoin_result$`2020 presidentialelection`[electoin_result$`2020 presidentialelection`== 'Republican/ Democratic (2nd District)'] <- 'Republican'
+
+
+```
+
+-Read the data set of the Covid cases and clean it:
+
+```{r}
+
+web <- read_html("https://en.wikipedia.org/wiki/Template:COVID-19_pandemic_data/United_States_daily_cases_in_2020")
+
+wiki <- web %>%
+  html_node("table.wikitable") %>%
+  html_table(fill = TRUE)
+
+wiki_table <- as.data.frame(wiki)
+
+#function that remove commans in number
+replaceCommas <- function(x) {x <- as.numeric(gsub("\\,", "", x))} 
+
+cols <- colnames(wiki_table) 
+sec_cols<-as.character(wiki_table[1,])
+sec_cols <- sec_cols[-c(7)]
+sec_cols <- append(sec_cols, "Date", 56)
+colnames(wiki_table) <- paste0(cols,"_", sec_cols)
+
+wiki_table <- wiki_table[wiki_table$Date_Date != "Date",]
+
+#table for the total count - only the 4 last rows
+wiki_table_total <- tail(wiki_table, n = 4) 
+
+#delete the 4 last rows
+wiki_table <- head(wiki_table, -4)
+
+#table for the amount of confirmed for each region and state by date
+wiki_confirmed <- wiki_table[-1,0:56]
+
+#table for summary the confirmed, recovered and deaths by date
+wiki_summary <- wiki_table[-1,57:64] 
+
+#change to date format
+wiki_summary$Date_Date <- dmy(wiki_summary$Date_Date)  
+
+#removing all commas and change to numeric variable
+for(i in 2:ncol(wiki_summary)) {wiki_summary[,i] <- replaceCommas(wiki_summary[, i])
+wiki_summary[, i] <- as.numeric(wiki_summary[, i])}
+
+#change na values to 0's
+wiki_summary[,-1] <- wiki_summary[,-1] %>%    
+  replace(is.na(.), 0)
+
+#removing all commas and change to numeric variable
+for(i in 2:ncol(wiki_confirmed)) {wiki_confirmed[,i] <- replaceCommas(wiki_confirmed[, i])
+wiki_confirmed[, i] <- as.numeric(wiki_confirmed[, i])}
+
+#change na values to 0's
+wiki_confirmed[,-1] <- wiki_confirmed[,-1] %>%   
+  replace(is.na(.), 0)
+
+#change to date format
+wiki_confirmed$Date_Date <- dmy(wiki_confirmed$Date_Date)  
+
+#dealing with missing values
+for(i in 2:nrow(wiki_confirmed)){
+  for(j in 1:ncol(wiki_confirmed)){
+    if(wiki_confirmed[i,j] == 0){
+      wiki_confirmed[i,j] = wiki_confirmed[i-1,j]
+    }
+  }
+}
+
+#create pivot table
+wiki_confirmed <- pivot_longer(wiki_confirmed, cols=-Date_Date ,
+                              names_to = c("region","state"),
+                              names_sep = "_",
+                              values_to = "amount")
+
+#merge with election dataset
+wiki_confirmed <- merge(wiki_confirmed, electoin_result, by = "state", all = TRUE)  
+
+#select the needed columns
+wiki_confirmed <-wiki_confirmed%>%select(state,Date_Date,amount,state_name,`2020 presidentialelection`)
+
+
+
+```
+
+1.lets take a look on comparison between republican state and democrat state : \
+*\*\*note : In order to get as real results as possible, we performed a comparison between two countries with a similar population size.*
+
+```{r,include=FALSE}
+
+WV_ME1 <- wiki_confirmed %>% filter(state_name %in% c("West Virginia", "Maine"))
+WV_ME1 <- ggplot(WV_ME1, aes(Date_Date, amount, color = state_name)) + geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+NM_KS1 <- wiki_confirmed %>% filter(state_name %in% c("New Mexico", "Kansas")) 
+NM_KS1 <- ggplot(NM_KS1, aes(Date_Date, amount, color = state_name))+ geom_line(size = 1) + labs(x = "Date", y = "Infections") +scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+
+CO_TN1 <- wiki_confirmed %>% filter(state_name %in% c("Colorado", "Tennessee"))
+CO_TN1 <- ggplot(CO_TN1, aes(Date_Date, amount, color = state_name))+ geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+NV_AR1 <- wiki_confirmed %>% filter(state_name %in% c("Nevada", "Arkansas"))
+NV_AR1 <- ggplot(NV_AR1, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+CT_LA1 <- wiki_confirmed %>% filter(state_name %in% c("Connecticut", "Louisiana"))
+CT_LA1 <- ggplot(CT_LA1, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+MT_HI1 <- wiki_confirmed %>% filter(state_name %in% c("Montana","Hawaii"))
+MT_HI1 <- ggplot(MT_HI1 , aes(Date_Date, amount, color = state_name)) + geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+OR_KY1 <- wiki_confirmed %>% filter(state_name %in% c("Oregon", "Kentucky"))
+OR_KY1 <- ggplot(OR_KY1, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+VT_WY1 <- wiki_confirmed %>% filter(state_name %in% c("Vermont", "Wyoming"))
+VT_WY1 <- ggplot(VT_WY1, aes(Date_Date, amount, color = state_name))  + geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+MO_WI1 <- wiki_confirmed %>% filter(state_name %in% c("Missouri", "Wisconsin"))
+MO_WI1 <- ggplot(MO_WI1, aes(Date_Date, amount, color = state_name))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+NJ_NC1 <- wiki_confirmed %>% filter(state_name %in% c("New Jersey", "North Carolina"))
+NJ_NC1 <- ggplot(NJ_NC1, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+DE_SD1 <- wiki_confirmed %>% filter(state_name %in% c("Delaware", "South Dakota"))
+DE_SD1 <- ggplot(DE_SD1, aes(Date_Date, amount, color = state_name))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+WA_IN1 <- wiki_confirmed %>% filter(state_name %in% c("Washington", "Indiana"))
+WA_IN1 <- ggplot(WA_IN1, aes(Date_Date, amount, color = state_name)) + geom_line(size = 1) + labs(x = "Date", y = "Infections" )+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+
+```
+```{r}
+
+grid.arrange(grobs=list(WV_ME1, NM_KS1, CO_TN1), nrow = 3,top = textGrob("The amount of those infected in each state"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(NV_AR1, CT_LA1, MT_HI1), nrow = 3,top = textGrob("The amount of those infected in each state"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(VT_WY1, OR_KY1, MO_WI1), nrow = 3,top = textGrob("The amount of those infected in each state"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(NJ_NC1, DE_SD1, WA_IN1), nrow = 3,top = textGrob("The amount of those infected in each state"),gp=gpar(fontsize=15,font=3))
+
+```
+
+
+*Explanation: It is very clear from the plots that there is a considerable difference in the number of patients between Republican states and democracies This result supports our assumption that Trump, who is a Republican, influenced his followers when he showed frivolity(=קלות ראש) regarding Covid.*
+
+2.  read the dataset of the quaranite datesb,clean it and take a look at the quarantine dates vs. the amount of patients in Republican states and Democracies. \
+    *\*\*note: since this data set does'nt contain all the states of the US we chose different amount of plots to present but The comparison is still being made between countries with similar population sizes.*
+
+```{r,warning = FALSE}
+#read the data set of the quarantine dates
+web <- read_html("https://en.wikipedia.org/wiki/U.S._state_and_local_government_responses_to_the_COVID-19_pandemic")
+
+#set it as data frame 
+data1 <- html_nodes(web,".wikitable")
+stay_at_home <- html_table(data1[2],header = T)
+stay_at_home <- as.data.frame(stay_at_home)
+#set the columns names
+colnames(stay_at_home) <- c("State", "Start_Date","End_Date")
+#set the dates
+stay_at_home$Start_Date<- mdy(stay_at_home$Start_Date)
+stay_at_home$End_Date<- mdy(stay_at_home$End_Date)
+
+#remove wisconsin ?
+stay_at_home <- stay_at_home%>%filter(State!="Wisconsin")
+
+#create new column of dates - for each state the days of quarantine
+stay_at_home<-stay_at_home %>%rowwise() %>%
+    do(data.frame(state=.$State, data=seq(.$Start_Date,.$End_Date,by="1 day")))
+
+#change the date column name
+stay_at_home <- stay_at_home%>%rename("date" = "data")
+
+#innerjoin with the election results so we will know the states political party
+stay_at_home <- inner_join(electoin_result,stay_at_home,by = c("state_name"="state"))
+
+#innerjoin with the wiki confirmed so we will see how many patients during the quarantine
+stay_at_home <- inner_join(wiki_confirmed,stay_at_home, by = c("state_name" = "state_name", "Date_Date" = "date"))
+
+#select only the needed columns
+stay_at_home <- stay_at_home %>% select(Date_Date,state_name,amount,`2020 presidentialelection.x`)
+stay_at_home$amount <- abs(stay_at_home$amount)
+
+```
+
+```{r,include=FALSE}
+
+
+NJ_AL2 <- stay_at_home %>% filter(state_name %in% c("New Jersey", "Alabama"))
+NJ_AL2 <- ggplot(NJ_AL2, aes(Date_Date, amount, color = state_name))+ geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+IL_TX2 <- stay_at_home %>% filter(state_name %in% c("Illinois", "Texas"))
+IL_TX2 <- ggplot(IL_TX2, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+MA_TN2 <- stay_at_home %>% filter(state_name %in% c("Massachusetts","Tennessee"))
+MA_TN2 <- ggplot(MA_TN2, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+SC_NJ2 <- stay_at_home %>% filter(state_name %in% c("South Carolina", "New Jersey"))
+SC_NJ2 <- ggplot(SC_NJ2, aes(Date_Date, amount, color = state_name))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+MO_MA2 <- stay_at_home %>% filter(state_name %in% c("Missouri", "Massachusetts"))
+MO_MA2 <- ggplot(MO_MA2, aes(Date_Date, amount, color = state_name))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+CO_SC2 <- stay_at_home %>% filter(state_name %in% c("Colorado", "South Carolina"))
+CO_SC2 <- ggplot(CO_SC2, aes(Date_Date, amount, color = state_name)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+NH_MS2 <- stay_at_home %>% filter(state_name %in% c("New Hampshire", "Mississippi"))
+NH_MS2 <- ggplot(NH_MS2 , aes(Date_Date, amount, color = state_name)) + geom_line(size = 1) + labs(x = "Date", y = "Infections" )+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+MA_IN2 <- stay_at_home %>% filter(state_name %in% c("Massachusetts", "Indiana"))
+MA_IN2 <- ggplot(MA_IN2, aes(Date_Date, amount, color = state_name)) + geom_line(size = 1) + labs(x = "Date", y = "Infections" )+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+```
+```{r}
+
+
+grid.arrange(grobs=list(NJ_AL2,IL_TX2,MA_TN2), nrow = 3,top = textGrob("The Amount of patients during quarantine"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(SC_NJ2,MO_MA2,CO_SC2), nrow = 3,top = textGrob("The Amount of patients during quarantine"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(NH_MS2 ,MA_IN2), nrow = 2,top = textGrob("The Amount of patients during quarantine"),gp=gpar(fontsize=15,font=3))
+```
+
+
+*Explanation:In this plot we cannot see as clearly as the former plot but there is a shown difference between the number of patients in Republican and Democratic countries during quarantines This result supports our assumption that Trump, who is a Republican, influenced his supporters when he showed frivolity regarding Corona.we know that Trump held crowded rallies and did not wear a mask so we assume his followers were influenced by that. Another interesting thing we noticed is that the quarantines at the republican states are much shorter than those on the democratic states.*
+
+3.Let's take a look at the number of vaccinated people in each state:
+
+```{r,include=FALSE}
+
+Vaccinations_info <- read.csv(here::here("data","us-daily-covid-vaccine-doses-administered.csv"))
+#set the date column
+Vaccinations_info$Day<- ymd(Vaccinations_info$Day)
+#inner join with the election data set to know the political party of each state
+Vaccinations_info <- inner_join(Vaccinations_info,electoin_result, by = c("Entity" = "state_name"))
+
+WV_ME3 <- Vaccinations_info %>% filter(Entity %in% c("West Virginia", "Maine")) 
+WV_ME3 <- ggplot(WV_ME3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+NE_NM3 <- Vaccinations_info %>% filter(Entity %in% c("Nebraska", "New Mexico"))
+NE_NM3 <- ggplot(NE_NM3, aes(Day, daily_vaccinations, color = Entity))+ geom_line(size = 1) + labs(x = "Date", y = "Infections") +scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+CO_TN3 <- Vaccinations_info %>% filter(Entity %in% c("Colorado", "Tennessee"))
+CO_TN3 <- ggplot(CO_TN3, aes(Day, daily_vaccinations, color = Entity))+ geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+NV_AR3 <- Vaccinations_info %>% filter(Entity %in% c("Nevada", "Arkansas"))
+NV_AR3 <- ggplot(NV_AR3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+CT_LA3 <- Vaccinations_info %>% filter(Entity %in% c("Connecticut", "Louisiana"))
+CT_LA3 <- ggplot(CT_LA3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+HI_MT3 <- Vaccinations_info %>% filter(Entity %in% c("Hawaii","Montana"))
+HI_MT3 <- ggplot(HI_MT3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+OR_KY3 <- Vaccinations_info %>% filter(Entity %in% c("Oregon", "Kentucky"))
+OR_KY3 <- ggplot(OR_KY3, aes(Day, daily_vaccinations, color = Entity))  + geom_line(size = 1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+	
+VT_WY3 <- Vaccinations_info %>% filter(Entity %in% c("Vermont", "Wyoming"))
+VT_WY3 <- ggplot(VT_WY3, aes(Day, daily_vaccinations, color = Entity))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+MO_WI3 <- Vaccinations_info %>% filter(Entity %in% c("Missouri", "Wisconsin"))
+MO_WI3 <- ggplot(MO_WI3, aes(Day, daily_vaccinations, color = Entity))+ geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+DE_SD3 <- Vaccinations_info %>% filter(Entity %in% c("Delaware", "South Dakota"))
+DE_SD3 <- ggplot(DE_SD3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size =1) + labs(x = "Date", y = "Infections")+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+
+NJ_NC3 <- Vaccinations_info %>% filter(Entity %in% c("New Jersey", "North Carolina"))
+NJ_NC3 <- ggplot(NJ_NC3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size = 1) + labs(x = "Date", y = "Infections" )+scale_color_manual(values=c("#2166ac","#b2182b"))
+
+
+WA_IN3 <- Vaccinations_info %>% filter(Entity %in% c("Washington", "Indiana"))
+WA_IN3 <- ggplot(WA_IN3, aes(Day, daily_vaccinations, color = Entity)) + geom_line(size = 1) + labs(x = "Date", y = "Infections" )+scale_color_manual(values=c("#b2182b","#2166ac"))
+
+
+```
+```{r}
+
+
+grid.arrange(grobs=list(WV_ME3, NE_NM3, CO_TN3), nrow = 3,top = textGrob("The Amount of vaccinated citizens"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(NV_AR3, CT_LA3, HI_MT3), nrow = 3,top = textGrob("The Amount of vaccinated citizens"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(OR_KY3, VT_WY3, MO_WI3), nrow = 3,top = textGrob("The Amount of vaccinated citizens"),gp=gpar(fontsize=15,font=3))
+grid.arrange(grobs=list(NJ_NC3, DE_SD3, WA_IN3), nrow = 3,top = textGrob("The Amount of vaccinated citizens"),gp=gpar(fontsize=15,font=3))
+```
+
+
+*Explanation:In this plot we can see that Republican states citizens are less vaccinated than those in Democratic states. This result supports our assumption. we assume that because of Trump's disparaging approach to corona severity and talk of therapies available in pharmacies as a treatment for the virus, his followers did not feel the need to run to get vaccinated as quickly as other citizens.In addition, It is important to note that not everyone in the US has health insurance so the vaccination procedure was not that easy which means they would prefer to go buy medicines at a pharmacy if Trump says its a possible solution.*
+
+
+
+
+
+

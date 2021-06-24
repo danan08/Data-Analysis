@@ -1,0 +1,707 @@
+---
+title: "Final Project - Part 2"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("gtools", dependencies = T)
+#install.packages("textdata")
+library(tidytext)
+library(textdata)
+library(ggExtra)
+library(rsample)
+library(parsnip)
+library(recipes)
+library(tidymodels)
+library(grid)
+library(gridExtra)
+library(dplyr)
+library(rvest)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+library(tidyverse)
+library("wordcloud")
+library(gtools) 
+library(qdap) # qualitative data analysis package (it masks %>%)
+library(tm) # framework for text mining; it loads NLP package
+library(SnowballC); 
+library(rJava);  # wordStem is masked from SnowballC
+library(lubridate)# Eases DateTime manipulation
+library(readr)#to read  files
+library(plotrix)
+library(stats)
+library("ggpubr")
+```
+
+```{r include=FALSE}
+civiqs_poll <- read_csv(here::here("data","civiqs_poll.csv"))
+
+#changing the date from character to Date type
+civiqs_poll$date<-as.Date(civiqs_poll$date,format="%m/%d/%Y" )
+
+#adding avg column
+civiqs_poll<-civiqs_poll %>% mutate(avg_concern=(rep+dem)/2)
+```
+
+\
+**In this part we will explore Donald Trumps tweets and answer the
+question -**
+
+**Can tweets be predictive of COVID concern?**
+
+To answer that we will explore the Donald Trump's tweets during the
+concern poll.
+
+```{r,echo=FALSE}
+#read the trump tweets rds and clean it
+tweets <- readRDS(here::here("data","trump.rds"))
+
+#seperate the time and date from the date column 
+tweets$Time <-format(as.POSIXct(tweets$date), format = "%H:%M:%S") 
+tweets$date <- as.Date(tweets$date)
+
+#change the retweets column to numeric 
+tweets$retweets <- as.numeric(tweets$retweets)
+tweets$favorites <- as.numeric(tweets$favorites)
+#change na values to 0's 
+tweets[is.na(tweets)] <- 0
+
+glimpse(tweets)
+```
+
+We can see the data contains 8 columns representing the tweets of Donald
+Trump during the covid concern poll was taken.
+
+| Column Name | Type       | Description                                              |
+|-------------|------------|----------------------------------------------------------|
+| date        | date       | the date the tweet was published                         |
+| f avorites  | double     | the number of people added this tweet to their favorites |
+| id          | ch aracter | the id of the user                                       |
+| i sRetweet  | bool       | is this tweet is a retweet of another tweet              |
+| retweets    | double     | the number of retweets made for this tweet               |
+| text        | ch aracter | the content of this tweet                                |
+| Time        | ch aracter | the time the tweet was published                         |
+
+### Step 1: clean the data
+
+After setting the data set as a data frame and arranged the data types
+of the columns, lets clean the columns from Irrelevant information.
+
+```{r,echo=FALSE}
+
+## clean the text column
+# remove \n
+tweets$text <- gsub("\n", " ", tweets$text )
+
+# remove url links
+tweets$text <- gsub("http.*","",tweets$text)
+
+# remove dots
+tweets$text <-gsub("\\.", "", tweets$text)
+
+# remove ’
+tweets$text <-gsub("\\’", "", tweets$text)
+
+# remove Punctuation: One of !"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
+tweets$text <-gsub("[^A-Za-z0-9]", " ", tweets$text)
+
+# replace double spaces with single space
+tweets$text <- str_replace_all(tweets$text, "  ", " ") 
+
+# all small letters
+tweets$text <- tolower(tweets$text)
+
+# remove numbers
+tweets$text <- tm::removeNumbers(tweets$text)
+
+# remove stop words
+tweets$text <- tm::removeWords(x = tweets$text, stopwords("english"))
+
+tweets$text <- tm::removeWords(x = tweets$text, c("rt","joe","amp","whitehouse","just","can","get","s","pm","will","realdonaldtrump"))
+tweets<-tweets%>% select(-id)
+glimpse(tweets)
+
+```
+
+Summarize of the tweets data set:
+
+```{r ,echo=FALSE,keep_md = TRUE}
+#count the number of retweets of each day 
+f2<- aggregate(tweets$retweets, by=list(Date=tweets$date), FUN=sum)
+f2 <- f2 %>% rename(sum_retweets = x)
+g2 <- ggplot(f2, aes(Date,sum_retweets))+geom_col(fill="#dd6170")+labs(x = NULL,y = "Amount",title = "Number of retweets each day")
+
+#count the number of favorites of each day
+f3 <- aggregate(tweets$favorites, by=list(Date=tweets$date), FUN=sum)
+f3 <- f3%>% rename(sum_favorites = x)
+g3 <- ggplot(f3, aes(Date,sum_favorites))+geom_col(fill ="mediumorchid1" )+labs(x = NULL,y = "Amount",title = "Number of favorites each day")
+
+#count the number of tweets of each day
+f1 <- tweets%>%group_by(date)%>%summarise(daily_tweets = n())
+g1 <- ggplot(f1, aes(date,daily_tweets))+geom_col(fill ="aquamarine3" )+labs(x = NULL,y = "Amount",title = "Number of tweets each day")
+
+#count the number of re-tweets tweets of each day
+f4 <- aggregate(tweets$isRetweet, by=list(Date=tweets$date), FUN=sum)
+f4 <- f4%>% rename(sum_isRetweet = x)
+g4 <- ggplot(f4, aes(Date,sum_isRetweet))+geom_col(fill ="royalblue1" )+labs(x = NULL,y = "Amount",title = "Number of re-tweets tweets each day")
+
+grid.arrange( g1,g2,g3,g4,  nrow = 2,ncol=2)
+```
+
+[*Explanation:*]{.ul} we can see that all of the plots above exhibit
+something that look like same behavior. But this is still too raw
+information, we will have to keep and explore more.
+
+so next we decided to explore the words of each tweet.
+
+### Step 2: Exploring the words meaning
+
+In order to understand the tweets content we chose to plot **the most
+common words**
+
+```{r,echo=FALSE,keep_md = TRUE}
+
+freq_words<-freq_terms(text.var = tweets$text, top = 40) # find the 40 most frequent words
+
+set.seed(1233)
+wordcloud(words = freq_words$WORD, freq = freq_words$FREQ, min.freq = 5,
+          max.words=100, random.order=FALSE, rot.per=0.40, 
+          colors=brewer.pal(8, "Dark2"))
+
+```
+
+[*Explanation:*]{.ul} *The size of each word in the plot represents its
+frequency ,we can see that coronavirus and great are at the highest
+frequency. it may imply that maybe most of his tweets were at a positive
+attitude toward the coronavirus.so we decided to explore the sentiments
+of the tweets.*
+
+more over, there are **words with double meaning**, such as the word
+Trump. For such words, which we do not know the exact meaning, we
+decided to give them a 0 sentiment
+
+lets see the **histogram of the words** and **their associations** with
+basic **emotions**:
+
+```{r,echo=FALSE,keep_md = TRUE}
+#vector of all the tweets$text
+text1 <- as.character(as.vector(tweets$text))
+
+#add line col for each tweet
+text_df <- tibble(line = 1:1549, text = text1)
+
+#each word a row - [line, row]
+text_df <- text_df %>%unnest_tokens(word, text)
+
+#joining the words from the tweets to nrc lexicon
+nrc_word_counts <- text_df %>%
+                      inner_join(get_sentiments("nrc"),by = "word") %>%
+                      count(sentiment,line,  sort = TRUE) %>%
+                      ungroup()
+
+#count the frequncy of each sentiment
+nrc_word_counts <- nrc_word_counts  %>% 
+                  group_by(line) %>% 
+                  mutate(max_sen = max(n)) %>% 
+                  ungroup()
+
+new_word_counts <-  nrc_word_counts[order(nrc_word_counts$line,decreasing = TRUE ),]
+new_word_counts <- new_word_counts %>% 
+                   filter ( n == max_sen ) %>% 
+                   select(line,sentiment)
+
+new_word_counts <- new_word_counts[!duplicated(new_word_counts$line), ]
+
+new_df <-aggregate(cbind(count = line) ~ sentiment, data = new_word_counts, FUN = function(x){NROW(x)})
+
+#Plot - count of words associated with each sentiment
+quickplot(sentiment, data=new_df, weight=count, geom="bar", fill=sentiment, ylab="Frequency")+ggtitle("Histogram of sentiments")+
+     theme(axis.text.x = element_text(angle = 50))
+```
+
+[*Explanation:*]{.ul}*We used the NRC Emotion Lexicon, it is a list in R
+of English words and their associations with basic emotions. It seems
+that most of his tweets are positive or has a good sentiment attached to
+it, which suppose to affect the concern of the citizens. so in order to
+use it in our the model we used another lexicon called AFINN that gives
+each emotion a numeric score*
+
+### Step 3: calculate for each tweet his Sentiment Score
+
+Now we want to calculate for each tweet his Sentiment Score, whether it
+is positive or negative. for this purpose we will use a package called
+AFINN, this package returns for each word a sentiment score between -5
+to 5. After getting the score of each word, we will move on to
+calculating the average for the tweet itself - by calculating the sum
+sentiment of the words divided by the number of words in the tweet- the
+score as well can be between -5 to 5.
+
+```{r,echo=FALSE}
+
+
+#Words and their score
+AFINN <- get_sentiments("afinn") %>%
+  select(word, afinn_score = value)%>%
+  filter(word !="trump")
+
+#lets change sentiment for Words with double meaning
+
+
+#joinin the two
+reviews_tweets <- text_df %>%
+  inner_join(AFINN, by = "word") %>%
+  group_by(line) %>%
+  summarize(sentiment = mean(afinn_score))
+
+# adding the sentiment to the tweet table
+tweets<-tweets%>%
+  mutate(line= c(1:1549))%>%
+   left_join(reviews_tweets, by = "line")
+tweets$sentiment<-replace_na(tweets$sentiment,0)
+
+glimpse(tweets)
+
+
+
+```
+
+## ***Building the model***
+
+In this part we would like to examine the extent of the impact of
+Trump's tweets on the level of concern among Republicans.
+
+while building this model we proceeded from the premise that if Trump's
+tweets had an impact, then they had a greater impact on Republicans.
+Evidence of this can be seen in the fact that from the beginning they
+were much less concerned about the Corona - unlike the Democrats.
+Moreover, the Republican jump in the level of apprehension rose
+dramatically compared to the Democrats, probably when they realized that
+the Corona was not a laugh, but a real state of emergency.
+
+### [**step 1 :**]{.ul} filter all tweets unrelated to coronavirus.
+
+for this purpose we created the vector with all the words related to the
+coronavirus and according to it we filtered out unrelated tweets.
+
+To each day we add the level of daily concern that was on that day from
+the civiqs_poll table.
+
+In addition, for tweets with [the word "positive"]{.ul} that were about
+"tested positive for Corona" we change The sentiment to -5.
+
+```{r ,echo=FALSE}
+
+# Choosing words related to covid
+text1 <- as.character(as.vector(tweets$text))
+covid_words <- c("coronavirus","virus","covid","health","china","medical","cdcgov","spread","chinese","fda","pandemic","sick","aid","antibiotic", "vaccine", "cure","caronavirus","hospital","test",'testing',"case","cases","carry","carriers","cause","caused","cdc","deadly","cdcdirector","cdcemergency","cdcgov","cdctravel","cdctravelnotice","cell","chinas","chronic","clinicaltrial","conference","contagious","diagnosis","diagnostic","died","corona","coronav","coronavi","coro","coron","covidpandemic","covidupdates","cmsgov","concerned","concerning","crisis","defeat","diagnos","disease","diseases","doctor","doctors","ebola","emergency","","cvshealth","danger","dangerous","deals","dealing","deaths","death","epidemic","flu","gehealthcare","health","healthcare","healthier","healthy","healthyfla","healthyoklah","italy","medications","nurses","panic","pandemics","panicking","quarantines","killthevirus","hospitals","hospital","ill","illnesses","infectious","infected","isolated","isolate","patient","patients","quarantine","quarantined","quaratinelife","recover","sanitizer","sick","slowthespread","socialdistancing","spared","distancing","stayathome","stay","sterilization","medical","medicaid","medica","medicare","medicine","sterilize","stopthespread","symptoms","treatment","unitedhealthgrp","vaccine","viru","viruses","washyourhands")
+
+all_words <- tibble(line = 1:1549, text = text1)
+only_lines_corona_words <- all_words %>%unnest_tokens(word, text)%>%filter(word %in%covid_words)%>%distinct(line)
+
+# All the tweets, their sentiment and the level of concern that was that day.
+tweets_about_covid<-tweets%>%
+  select(date,Time,sentiment,retweets,text,line,isRetweet)%>%     # choosing the relevant cols
+  filter(sentiment!=0)%>%                               # Filter neutral tweets 
+  inner_join(civiqs_poll, by='date')%>%                 # join the level of concern
+  arrange(date,Time)%>%                                 # oreder by date and time
+  mutate(order=row_number())%>%                         # adding the order as col to plot clearly
+  filter(line %in% only_lines_corona_words$line  )      # filter the non corona tweets
+
+#
+rowstochane<- tweets_about_covid%>%filter(str_detect(text , "positive"))%>% mutate(sentiment=-5)
+lines<-rowstochane$line
+tweets_about_covid<-tweets_about_covid%>%filter(!str_detect(text , "positive"))
+tweets_about_covid<-rbind(rowstochane, tweets_about_covid)
+
+glimpse(tweets_about_covid)
+
+```
+
+now lets see the frequency again but this time only on the tweets
+related to covid:
+
+```{r}
+freq_words<-freq_terms(text.var = tweets_about_covid$text, top = 40) # find the 40 most frequent words
+
+set.seed(1233)
+wordcloud(words = freq_words$WORD, freq = freq_words$FREQ, min.freq = 5,
+          max.words=100, random.order=FALSE, rot.per=0.40, 
+          colors=brewer.pal(8, "Dark2"))
+
+```
+
+explanation: You can see how all of a sudden when we filtered only the
+relevant covid tweets, the most frequent words changed quite a bit,
+Suddenly we see words like: crisis, stay, strong, together,spread.
+
+Now even more than before we see the trend of his tweets, Although he
+talks a lot about Corona, he does say a lot of words of encouragement ,
+saying positive and reassuring words.
+
+### [**step 2 :**]{.ul} create A table of the daily averages:
+
+1.  Average daily sentiment.
+2.  Average daily amount of re-tweets.
+3.  Amount of daily tweets.
+4.  Amount of daily re-tweets that Trump did to others.
+
+We have chosen to implement this table because We would like to test
+whether tweets have a daily impact on the concern level of the
+population and therefore tweet in itself does not contribute much so we
+would like to calculate the averages by day.
+
+[note]{.ul}: the mean sentiment Will receive values in percentages from
+-100 to 100.
+
+```{r,echo=FALSE}
+tweets_about_covid_avg<-tweets_about_covid%>% 
+  # add col with value 1 if isRetweet=True will else 0
+  mutate(ISREtweet= str_count(isRetweet, 'TRUE'))%>%  
+  group_by(date,rep,dem)%>%
+  summarise(mean_sentiment=mean(sentiment)/5*100,
+            mean_retweets=mean(retweets),
+            num_isRetweet=sum(ISREtweet),
+            daily_tweets=n(), .groups = 'drop');
+
+head(tweets_about_covid_avg)
+```
+
+### [**step 3 :**]{.ul} Explore the table, before implementing the model
+
+-   Display of the **date** as **X axis** ,the **level of concern** as
+    **Y** **axis** and **fill** of each column in the **average
+    quantity** we calculated in the previous table -
+    tweets_about_covid_avg
+
+```{r ,echo=FALSE}
+
+
+g_a<-ggplot(tweets_about_covid_avg, aes(x =  date, y =rep  ,fill= mean_sentiment)) +
+     geom_col()+ 
+     scale_fill_viridis_c()+
+     labs(x=NULL,y="Level of concern")+ 
+     guides(fill=guide_legend(title="mean sentiment"))
+
+g_b<-ggplot(tweets_about_covid_avg, aes(x =  date, y =rep  ,fill= mean_retweets)) +
+     geom_col()+ 
+     scale_fill_viridis_b()+
+     labs(x=NULL,y=NULL)+ 
+     guides(fill=guide_legend(title="mean retweets"))
+
+g_c<-ggplot(tweets_about_covid_avg, aes(x =  date, y =rep  ,fill= daily_tweets)) +
+     geom_col()+ 
+     scale_fill_viridis_c()+
+     labs(y="Level of concern",x=NULL)+ 
+     guides(fill=guide_legend(title="daily tweetst"))
+
+g_d<-ggplot(tweets_about_covid_avg, aes(x =  date, y =rep  ,fill= num_isRetweet)) +
+     geom_col()+ 
+     scale_fill_viridis_c()+
+     labs(y=NULL,x=NULL)+ 
+     guides(fill=guide_legend(title="daily isRetweet"))
+
+grid.arrange(g_a,g_b,g_c,g_d, nrow = 2,ncol =2,
+     top = textGrob("Level of Concern vs. Date filled by Daily Averages",
+                    gp=gpar(fontsize=15,font=3)))
+
+```
+
+From this view we can see some interesting things:
+
+1.  When the Republican's level of concern rises from minus to plus,
+    Trump's daily tweets rises as well.
+2.  Same for the number of re-tweets he does.
+3.  The trend of the daily sentiment of his tweets becomes more and more
+    positive as the level of concern of Republicans rises.
+
+-   Now we will try to plot the data in another AVG view, maybe we will
+    be able to extract more information - Display of the **level of
+    concern** as **X axis** ,and the **average quantity** as **Y**
+    **axis**
+
+```{r , echo=FALSE}
+
+g_e<-ggplot(tweets_about_covid_avg, aes( x =rep  ,y= mean_sentiment,fill=T)) + 
+     geom_col(show.legend = FALSE)+labs(x=NULL,y="mean sentiment")+ 
+     theme(axis.title.y = element_text(size = 9.5))+
+     scale_fill_manual(values="lightblue3")
+
+g_f<-ggplot(tweets_about_covid_avg, aes( x =rep  ,y= mean_retweets,fill=T)) +
+     geom_col(show.legend = FALSE)+labs(x=NULL,y="mean retweets")+ 
+     theme(axis.title.y = element_text(size = 9.5))+
+     scale_fill_manual(values="lightgoldenrod3")
+
+g_g<-ggplot(tweets_about_covid_avg, aes( x =rep  ,y= daily_tweets,fill=T)) +
+     geom_col(show.legend = FALSE)+labs(x=NULL,y="daily tweets")+ 
+     theme(axis.title.y = element_text(size = 9.5))+
+     scale_fill_manual(values="lightpink")
+
+g_h<-ggplot(tweets_about_covid_avg, aes( x =rep  ,y= num_isRetweet,fill=T)) +
+     geom_col(show.legend = FALSE)+
+     labs(x="Level of concern",y="daily isRetweet")+ 
+     theme(axis.title.y = element_text(size = 9.5),
+           axis.title.x = element_text(size = 12))+
+     scale_fill_manual(values="darkolivegreen3")
+
+grid.arrange(g_e, g_f,g_g,g_h, nrow = 4,
+     top = textGrob("Level of Concern vs. Daily Averages",
+                    gp=gpar(fontsize=15,font=3)))
+
+
+
+```
+
+From this Plots we can see that there is **no fixed trend**.
+
+nevertheless, it should be noted that we can see from BOTH plots, this
+one and the previous - that **in the** **early Corona**, when the level
+of concern was very low, **Trump tweeted a lot, tweeted also tweets with
+low sentiment score, and got a lot of re-tweets about his tweets**. And
+as time goes on and concern level increases, these measures decrease
+relatively. But with the **transition from a negative to a positive
+level of concern** the **measures rises rapidly** and even **higher**.
+
+### [step 4 :]{.ul}see if we can suggest about any linear connection
+
+-   FIRST we will make a [comparison between the various measurements
+    and the level of concern,]{.ul} When one view through points, and
+    the other by drawing a line
+
+```{r ,echo=FALSE}
+
+
+
+g_i<-ggplot(tweets_about_covid_avg,aes(x= mean_sentiment))+
+    geom_smooth(aes(y = rep),method = 'loess',color=" mediumorchid1",formula=y ~ x)+
+    labs(y="Level of concern",x="mean sentiment")
+
+g_j<-ggplot(tweets_about_covid_avg,aes(x= mean_retweets))+
+    geom_smooth(aes(y = rep),method = "loess",color="lightseagreen",formula=y ~ x)+
+    labs(y=NULL,x="mean retweets")   + 
+    theme(axis.text.x = element_text(size=8))
+
+g_k<-ggplot(tweets_about_covid_avg,aes(x= num_isRetweet))+
+     geom_smooth(aes(y = rep),method = 'loess',color="indianred1",formula=y ~ x)+
+     labs(y="Level of concern",x="daily isRetweet")
+
+g_l<-ggplot(tweets_about_covid_avg,aes(x= daily_tweets))+
+     geom_smooth(aes(y = rep),method = "loess",color="royalblue3",formula=y ~ x)+
+     labs(y=NULL,x="daily tweets")    
+
+g_m<-ggplot(tweets_about_covid_avg,aes(x= mean_sentiment ,y=rep))+
+     geom_point(colour = "mediumorchid1")+
+     labs(y="Level of concern",x=NULL)
+
+g_n<-ggplot(tweets_about_covid_avg,aes(x= mean_retweets ,y=rep))+
+     geom_point(colour = "lightseagreen")+
+     labs(y=NULL,x=NULL)+ 
+     theme(axis.text.x = element_text(size=8))
+
+g_o<-ggplot(tweets_about_covid_avg,aes(x= daily_tweets,y=rep))+
+     geom_point(colour = "indianred1")+
+     labs(y="Level of concern",x=NULL)
+
+g_p<-ggplot(tweets_about_covid_avg,aes(x= num_isRetweet,y=rep))+
+  geom_point(colour = "royalblue3")+
+  labs(y=NULL,x=NULL)
+
+grid.arrange(g_i, g_j,g_k,g_l,   g_m,g_n,g_o, g_p    , nrow = 2,ncol =4,
+     top = textGrob("The Level of Concern by the Daily Averages",gp=gpar(fontsize=15,font=3)))
+
+
+```
+
+It can be seen that there is **no real linear relationship** **between
+the variables**,
+
+we will now move on to building the model itself.
+
+### [**step 5 :**]{.ul} implement the model
+
+Divide the data into [train]{.ul} and [test]{.ul}
+
+```{r }
+
+model_df<-tweets_about_covid_avg%>%
+  select(-dem)%>%
+  rename(real_concern=rep)
+
+#Create an initial split
+set.seed(79997)
+model_split <- initial_split(model_df) # prop = 3/4 by default
+
+#Save testing, training data
+model_train <- training(model_split)  
+model_test	<- testing(model_split)  
+
+
+```
+
+[Specify the model-]{.ul} We will decide on a **linear model**, We then
+**construct the recipe** of the model and select the date to be our
+column identifier and not as a variable. and then we will **build the
+work-flow**: A workflow is a container object that aggregates
+information required to fit and predict from a model.
+
+The Coefficients:
+
+```{r}
+
+tweet_model<-linear_reg() %>%
+  set_engine("lm")
+
+# Build recipe
+tweet_rec <- recipe(real_concern ~.  ,data = model_train)%>%
+# date isn't a predictor, but keep around to ID
+  update_role(date, new_role = "Date_id")#;tweet_rec
+
+# build workflow
+model_wflow<-workflow()%>%
+  add_model(tweet_model)%>%
+  add_recipe(tweet_rec)
+
+tweet_fit<-model_wflow%>%
+   fit(data=model_df)#;tweet_fit
+ 
+tidy(tweet_fit)
+
+
+```
+
+In this part we will Make predictions for training data, and also for
+the TEST data. For each prediction we will make Pearson correlation
+test.
+
+```{r,echo=FALSE}
+
+# TRAIN
+tweet_train_pred <- predict(tweet_fit, model_train) %>%  
+  bind_cols(model_train %>% 
+              select(real_concern, date))
+
+#tweet_train_pred_res<-
+
+
+# TEST
+tweet_test_pred <- predict(tweet_fit, model_test) %>%
+  bind_cols(model_test %>% 
+              select(real_concern, date))
+
+
+# PLOT 
+tweet_train_pred<-tweet_train_pred  %>% rename(train.pred=.pred) 
+
+tweet_test_pred<-tweet_test_pred  %>% rename(test.pred=.pred)
+
+train_cor<-cor.test(x=tweet_train_pred$real_concern,y=tweet_train_pred$train.pred, method = "pearson");train_cor
+
+test_cor<-cor.test(x=tweet_test_pred$real_concern,y=tweet_test_pred$test.pred, method = "pearson");test_cor
+
+as.data.frame(rbind(train=train_cor$estimate,test=test_cor$estimate))%>%rename(correlation=cor)
+
+  
+```
+
+[We got the following results:]{.ul} for the TRAIN data the Prediction
+was quite successful with a correlation of almost 70% In comparison to
+the TEST data where we got correlation of 37% - only half from the train
+result.
+
+NOW we will **improve our model by create the K-fold Cross Validation**
+- randomly splits the data into K groups,Each time one fold will be the
+test data and the rest(k-1 fold) will be the train data We'll do it k
+times.
+
+```{r }
+
+#Split data into folds
+set.seed(35444445)
+folds <- vfold_cv(model_train, v = 5) #; folds
+
+#Fit resamples
+
+set.seed(436)
+keep_pred <- control_resamples(save_pred = TRUE, save_workflow = TRUE)
+
+tweet_fit_rs <- model_wflow %>%  
+  fit_resamples(folds, control = keep_pred)
+
+
+assess_resulte <- collect_predictions(tweet_fit_rs,summarize = TRUE)
+
+
+```
+
+The differences between the model results and the true value:
+
+```{r,echo=FALSE}
+
+res<-assess_resulte %>% 
+  select(real_concern,.pred)%>%
+  mutate(Distance=real_concern-.pred) %>% 
+  arrange(desc(Distance))%>%
+  rename(Predictions=.pred,
+         `Real Concern`=real_concern)
+
+head(res)
+```
+
+Analyze the **k-cross fold validation** **result by - Pearson
+correlation**
+
+```{r ,echo=FALSE}
+
+result<-collect_predictions(tweet_fit_rs,summarize = F)%>%
+  group_by(id)%>%
+  summarise(`Pearson correlation`=cor(real_concern,.pred))%>%
+  rename(Fold=id)
+mean_cor<-cor(assess_resulte$real_concern,assess_resulte$.pred)
+
+rbind(c("Final Correlation",mean_cor),result)
+```
+
+The average Pearson measure we got is 0.54, with the lowest being 0.32
+and the highest reaching to 0.85.
+
+Plot of the results - **Predicted vs. Real Concern**
+
+```{r warning=FALSE, ,echo=FALSE}
+
+ggscatter(assess_resulte, x = "real_concern", y = ".pred", 
+          add = "reg.line", conf.int = TRUE,color = "purple" ,
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Real", ylab = "Predicted",
+          title = "Predicted vs. Real Concern Value Correlation")
+
+```
+
+### To summarize the results of the model-
+
+1.  Our Final average prediction result is 54 percent according to
+    Pearson correlation measurement.
+2.  When we added the K-fold Cross Validation fitness to our model we
+    got significantly better results from the first test that we
+    performed - 0.37 compared to 0.54
+3.  Although we were able to improve the model results, We were unable
+    to reach a satisfactory prediction
+4.  Even before the model was built, we expected that the model would
+    probably not provide impressive results - from the plots we see that
+    it is hard to say that there is direct linear connection between the
+    variables.
+5.  Perhaps another model could predict better results. From the Plots
+    we have shown earlier, it can perhaps be assumed that a polynomial
+    model would have been even more successful than the linear model we
+    build.
+6.  In addition, the model we built may not be enough - it may be that
+    the word mapping we performed is not accurate enough, in the English
+    language we have a lot of words that have several meanings, so their
+    sentiment analysis is more complicated than we assumed. Which of
+    course in the end damages the results of the model.
+7.  On a personal note, we think Trump and his tweets did have an impact
+    on Republicans. At least in the early days of the corona. The fact
+    that we were unable to prove it does not contradict it.

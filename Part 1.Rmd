@@ -1,0 +1,511 @@
+---
+title: "Final Project - Part 1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# General-purpose data wrangling
+library(tidyverse)  
+
+library(ggplot2)
+# Eases DateTime manipulation
+library(lubridate)
+
+#to read csv files
+library(readr)
+
+#arrange the plots
+library(gridExtra)
+#word cloud plot 
+library(wordcloud)
+# qualitative data analysis package (it masks %>%)
+library(gtools) 
+library(qdap) 
+# framework for text mining; it loads NLP package
+library(tm) 
+library(SnowballC); library(rJava);
+#packages for data cleaning
+library(tidytext)
+library(textdata)
+library(quanteda)
+library(Hmisc)
+library(dplyr)
+library(rvest)
+library(ggplot2)
+library(tidyr)
+library(lubridate)
+library(tidyverse)
+ 
+library(mapproj)
+library(maps)
+
+```
+
+### In this part we will perform exploration of two data sets:
+
+## [**1. Covid Concern**]{.ul}
+
+This data set is the result of a poll conducted at the US during the covid outbreak period.\
+it describes the level of concern of the US citizens separated by their Political polarization.\
+at first we will read the csv given in the project instructions:
+
+```{r,include=FALSE}
+civiqs_poll <- read_csv(here::here("data","civiqs_poll.csv")) 
+
+```
+
+we can see that the data set contains 4 columns and 41 rows. the type of the date column is character , we need it to be date :
+
+```{r echo=FALSE}
+#changing the date from character to Date type
+civiqs_poll$date<-as.Date(civiqs_poll$date,format="%m/%d/%Y" )
+glimpse(civiqs_poll)
+```
+
+Explanation of the columns:\
+
++-------------+---------+-----------------------------------------------+
+| Column Name | Type    | Description                                   |
++=============+=========+===============================================+
+| date        | date    | the date the citizens report their concern    |
++-------------+---------+-----------------------------------------------+
+| dem         | double  | the concern level of the democrats            |
++-------------+---------+-----------------------------------------------+
+| rep         | double  | the concern level of the republicans          |
++-------------+---------+-----------------------------------------------+
+| diff        | double  | the difference between their concerns         |
++-------------+---------+-----------------------------------------------+
+
+In order to understand our data we chose to explore interesting statistics on the data:
+
+```{r,echo=FALSE}
+#Column Calculations
+colMax <- c(max(civiqs_poll$dem, na.rm = TRUE),max(civiqs_poll$rep, na.rm = TRUE),max(civiqs_poll$diff, na.rm = TRUE))
+colsd <- c(sd(civiqs_poll$dem, na.rm = TRUE),sd(civiqs_poll$rep, na.rm = TRUE),sd(civiqs_poll$diff, na.rm = TRUE))
+colMin <- c(min(civiqs_poll$dem, na.rm = TRUE),min(civiqs_poll$rep, na.rm = TRUE),min(civiqs_poll$diff, na.rm = TRUE))
+colMedian <-c(median(civiqs_poll$dem, na.rm = TRUE),median(civiqs_poll$rep, na.rm = TRUE),median(civiqs_poll$diff, na.rm = TRUE))
+colMean <- c(mean(civiqs_poll$dem, na.rm = TRUE),mean(civiqs_poll$rep, na.rm = TRUE),mean(civiqs_poll$diff, na.rm = TRUE))
+mat <- c(colMax,colMin,colMedian,colMean,colsd)
+tab <- matrix(mat, ncol=3, byrow=TRUE)
+colnames(tab) <- c('Democrats','Republicans','Difference')
+rownames(tab) <- c('MAX','MIN','MEDIAN','MEAN','SD')
+tab <- as.table(tab)
+
+tab
+```
+
+### Plotting the data :
+
+```{r Level_of_concern,include=FALSE}
+
+#rearrange the data set for the plots
+dem_vs_rep <- civiqs_poll %>%
+  select(date, rep, dem) %>%
+  filter(date>="2020-03-01" & date<"2020-04-05")%>%
+  gather(key = "political_Group", value = "Value", -date)
+`Political Group`<-factor(dem_vs_rep$`political_Group`,labels = c("Democrats","Republicans"))
+
+#first plot - presents Level of concern among republicans and democrats
+g1<-ggplot(dem_vs_rep, aes(x = date, y = Value)) + 
+  geom_line(aes(color = `Political Group`),size = 1.1) + 
+  scale_color_manual(values = c("#2166ac","#b2182b"))+labs(x = "Date",y = "Level of concern",
+title = "Level of concern among republicans and democrats"
+)+scale_x_date(date_breaks = "1 weeks")
+
+#secont plot - Comparing the difference between republicans and democrats
+g2<-ggplot(dem_vs_rep, aes(x = Value,y=`Political Group`,col=`Political Group` )) +
+scale_fill_manual(breaks = `Political Group`)+
+geom_boxplot(color =  c("#2166ac","#b2182b")) +
+labs(x = "level of concern",y = NULL,
+title = "Comparing the difference ")+guides(col=F)
+
+#third plot - get the average concern of all citizens of the US
+civiqs_poll1<-civiqs_poll%>%
+    mutate(Avarge=(rep+dem)/2)%>%
+    filter(date>="2020-03-01" &date<"2020-04-01")
+
+g3<-ggplot(civiqs_poll1, aes(x = date, y = Avarge)) + 
+  geom_line(color="#AC79AA",size = 1.1)+labs(
+x = NULL,
+y = "Level of concern",
+title = "The Avarge Level of concern over time amoung US citizen"
+)+scale_x_date(date_breaks = "1 weeks");
+
+```
+
+```{r echo=FALSE}
+grid.arrange(g1, g2,g3,  nrow = 3)
+
+```
+
+*Explanation: It seems that there is a clear difference in the concern between the republicans and democrats. while the republicans had negative concern at March (meaning they werent concerned of the covid) and the concern seems to rise as the months goes by. the democrats on the other hand had positive concern all the covid period.The conclusion is that the chage in the concern of the republicans wes much higher than the democrats.*
+
+
+
+## [**2. Covid Cases**]{.ul}
+
+[**\
+**]{.ul}This data set presents actual information on the US patients status at each date since the beginning of covid outbreak in the US. The data is separated by dates, states and directions. at the right side of each month table there is a summarize table of all deaths,recovered and confirmed patients.\
+\
+This data set was given to us as a wikipedia page so at first we will read it and set it as data frame
+
+```{r,include=FALSE}
+
+web <- read_html("https://en.wikipedia.org/wiki/Template:COVID-19_pandemic_data/United_States_daily_cases_in_2020")
+
+wiki <- web %>%
+  html_node("table.wikitable") %>%
+  html_table(fill = TRUE)
+
+wiki_table <- as.data.frame(wiki)
+
+
+```
+
+```{r}
+dim(wiki_table)
+
+```
+
+As we can see this data set contains 64 columns and 337 rows.\
+the data is not organized and the data types are not usable.\
+so before we explore this data we need to clean and organize it:
+
+```{r echo=FALSE}
+
+cols <- colnames(wiki_table) 
+sec_cols<-as.character(wiki_table[1,])
+sec_cols <- sec_cols[-c(7)]
+sec_cols <- append(sec_cols, "Date", 56)
+colnames(wiki_table) <- paste0(cols,"_", sec_cols)
+
+wiki_table <- wiki_table[wiki_table$Date_Date != "Date",]
+#table for the total count - only the 4 last rows
+wiki_table_total <- tail(wiki_table, n = 4) 
+#delete the 4 last rows
+wiki_table <- head(wiki_table, -4)
+
+#table for the amount of confirmed for each region and state by date
+wiki_confirmed <- wiki_table[-1,0:56]
+
+#table for summary the confirmed, recovered and deaths by date
+wiki_summary <- wiki_table[-1,57:64] 
+#change to date format
+wiki_summary$Date_Date <- dmy(wiki_summary$Date_Date)  
+#removing all commas and change to numeric variable
+for(i in 2:ncol(wiki_summary)) {wiki_summary[,i] <-  as.numeric(gsub(",","",wiki_summary[, i]))}
+
+#change na values to 0's
+wiki_summary[,-1] <- wiki_summary[,-1] %>%    
+  replace(is.na(.), 0)
+
+#removing all commas and change to numeric variable
+for(i in 2:ncol(wiki_confirmed)) {wiki_confirmed[,i] <- as.numeric(gsub(",","",wiki_confirmed[, i]))}
+#change to date format
+wiki_confirmed$Date_Date <- dmy(wiki_confirmed$Date_Date)  
+#change na values to 0's
+wiki_confirmed[,-1] <- wiki_confirmed[,-1] %>%   
+  replace(is.na(.), 0)
+#create pivot table
+wiki_confirmed <- pivot_longer(wiki_confirmed, cols=-Date_Date ,
+                               names_to = c("region","state"),
+                               names_sep = "_",
+                               values_to = "amount")
+
+#for negative values - to 0's
+for(j in 1:nrow(wiki_confirmed)) {
+  if(wiki_confirmed[j,4] < 0 ){
+    wiki_confirmed[j,4]<- 0}}
+
+
+```
+
+*Explanation: we cleaned the data from commas and unwanted signs , we set the data column to be of date data type and all other columns to be of numeric type.\
+we chose to separate the data to 3 tables -\
+1. wiki_table - the entire data from the wikipedia page.\
+```{r}
+head(wiki_table,2)
+```
+
+2.wiki_confirmed - only the data about the confirmed patients separated by states.\
+```{r,echo=FALSE}
+glimpse(wiki_confirmed) 
+```
+
+3.wiki_summary - the summarized data about deaths , recovered and confirmed patients for all the states in the data.*
+```{r,echo=FALSE}
+glimpse(wiki_summary)
+```
+
+
+before starting to plot the data we decided to explore interesting statistics on the data:
+
+```{r, echo=FALSE}
+#Column Calculations
+colMax <- c(max(wiki_summary$Confirmed_Daily, na.rm = TRUE),max(wiki_summary$Deaths_Daily, na.rm = TRUE),max(wiki_summary$Recovered_Daily, na.rm = TRUE))
+colsd <- c(sd(wiki_summary$Confirmed_Daily, na.rm = TRUE),sd(wiki_summary$Deaths_Daily, na.rm = TRUE),sd(wiki_summary$Recovered_Daily, na.rm = TRUE))
+colMin <- c(min(wiki_summary$Confirmed_Daily, na.rm = TRUE),min(wiki_summary$Deaths_Daily, na.rm = TRUE),min(wiki_summary$Recovered_Daily, na.rm = TRUE))
+colMedian <-c(median(wiki_summary$Confirmed_Daily, na.rm = TRUE),median(wiki_summary$Deaths_Daily, na.rm = TRUE),median(wiki_summary$Recovered_Daily, na.rm = TRUE))
+colMean <- c(mean(wiki_summary$Confirmed_Daily, na.rm = TRUE),mean(wiki_summary$Deaths_Daily, na.rm = TRUE),mean(wiki_summary$Recovered_Daily, na.rm = TRUE))
+mat <- c(colMax,colMin,colMedian,colMean,colsd)
+tab <- matrix(mat, ncol=3, byrow=TRUE)
+colnames(tab) <- c('Confirmed_Daily','Deaths_Daily','Recovered_Daily')
+rownames(tab) <- c('MAX','MIN','MEDIAN','MEAN','SD')
+tab <- as.table(tab)
+
+tab
+
+```
+
+
+
+### Plotting the data :
+
+```{r,include=FALSE,warning=FALSE}
+
+#rearrange the data set for the plots
+sum_patients <- wiki_summary %>%
+  select(Date_Date, Confirmed_Daily, Deaths_Daily,Recovered_Daily) %>%
+  filter(Date_Date>="2020-03-09" & Date_Date<"2020-04-04")%>%
+  gather(key = "Patients_status", value = "Value", -Date_Date)
+`Patients_status`<-factor(sum_patients$`Patients_status`,labels = c("Confirmed","Deaths","Recovered"))
+
+#first plot - The daily status of the patients
+g4<-ggplot(sum_patients, aes(x = Date_Date, y = Value)) + 
+  geom_line(aes(color = `Patients_status`),size = 1) + 
+  scale_color_manual(values = c("#2166ac","#b2182b","#ef8a62"))+labs(x = "Date",y = "Amount of patients",
+title = "Amount of patients separated by their status"
+)+scale_x_date(date_breaks = "1 weeks")
+
+#arrange the data set for the plot
+Active_per_day<-wiki_summary%>%
+  select(Date_Date,Confirmed_Total,Deaths_Total,Active_Total)%>%
+  filter(Date_Date>="2020-03-01" & Date_Date<"2020-04-04")
+
+#second plot - The number of active patients each day
+g5<-ggplot(Active_per_day, aes(x = Date_Date, y = Active_Total)) + 
+  geom_line(color="#AC79AA", size = 1.1)+labs(
+x = NULL,
+y = "Number of people",
+title = "The number of active patients each day over time"
+)+scale_x_date(date_breaks = "1 weeks")+ ylim(0,250000)
+
+```
+
+```{r, echo=FALSE, warning=FALSE}
+grid.arrange(g4, g5, nrow = 2)
+
+```
+
+*Explanation: at the first plot we chose to explore the summarize tables to see the changes in the patients status over the time. it seems that as the time passes the number of confirmed patients significantly increases were as the deaths and recovered stays relatively low.\
+at the second plot we chose to explore the number of active patients for each day - it seems that since the 16/03/2021 it starts to increase significantly.*
+
+After Exploring those two data sets we thought they can be more useful to our research if we combine them together , we found a third data set that gives us information about the political party of each state. the division into states was determined by election to the presidency
+
+```{r,include=FALSE}
+#read the web page of the third data set 
+web2 <- read_html("https://en.wikipedia.org/wiki/Political_party_strength_in_U.S._states")
+
+data <- html_nodes(web2,".wikitable")
+electoin_result <- html_table(data[[2]],header = T)
+#list of all states shortcuts
+S <- c("AL" ,"AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY")
+
+#combine the list with the data set 
+electoin_result$short_state<-S
+
+
+```
+
+```{r echo=FALSE}
+electoin_result
+
+```
+
+we can see this data set contains 10 columns and 50 rows. we only care about 3 columns - State,2020 presidential election,short_state. so we will arrange the data for it.
+
+```{r, echo=FALSE}
+
+#arrange the data for the plot
+e1<-electoin_result%>%select(State,`2020 presidentialelection`,short_state)
+
+e1$`2020 presidentialelection`[e1$`2020 presidentialelection`== 'Democratic/ Republican (2nd District)'] <- 'Democratic'
+e1$`2020 presidentialelection`[e1$`2020 presidentialelection`== 'Republican/ Democratic (2nd District)'] <- 'Republican'
+
+rep <- e1$State[e1$`2020 presidentialelection` == 'Republican']
+dem <- e1$State[e1$`2020 presidentialelection` == 'Democratic']
+rep <- tolower(rep)
+dem <- tolower(dem)
+
+us_states <- map_data("state")
+us_states$political <- ifelse(us_states$region %in% rep, "Republican", "Democratic") 
+
+#map of USA with political party of each state
+g6 <- ggplot(data = us_states,mapping = aes(x = long, y = lat,group = group, fill = political)) + geom_polygon(color = "gray90", size = 0.1) +
+    coord_map(projection = "albers", lat0 = 39, lat1 = 45) + scale_fill_manual(values = c("#2166ac","#c01d31")) +labs(title = "Election Results 2020", fill = NULL)
+
+g6
+```
+
+
+
+*Explanation: In order to see the division of the political party over the US we chose to plot the map of the US and color the states by the political party of the majority of the population in each state.\
+- red = Republicans as the color of the republicans Political party.\
+- blue = Democrats as the color of the democracies Political party.\
+we can see that it divides almost equally between all 51 states of the USA*
+
+```{r, echo=FALSE}
+#arrange the data for the plot
+w1<-wiki_confirmed%>%
+  filter(Date_Date>="2020-03-01" & Date_Date<"2020-04-01")%>%
+  inner_join(e1,by=c("state"="short_state"))%>%
+  group_by(Date_Date,`2020 presidentialelection`)%>%
+  summarise(amount = sum(amount),.groups = 'drop')%>%
+  filter(`2020 presidentialelection`%in% c("Democratic","Republican"))
+
+#second plot - The number of active patients for republicans and democrats states
+g7<-ggplot(w1, aes(x = Date_Date, y = amount,color=`2020 presidentialelection`)) + 
+geom_line(size = 1.1)+scale_color_manual(values = c("#2166ac","#b2182b"))+labs(x = NULL,y = "Number of people",title = "The number of active patients each day over time")+scale_x_date(date_breaks = "1 weeks")
+
+g7
+```
+
+
+
+*Explanation: at this plot we chose to explore the number of active patients for each political party - it seems that since the 16/03/2021 it starts to increase significantly. there is Steep rise for the democrats states.*
+
+## [Summarize:]{.ul}
+
+After reading , cleaning and studding those two data sets we chose to explore the connection between them:\
+\
+
+Statistics: get the 3 states who had the maximum amount of daily confirmed
+
+```{r, echo=FALSE}
+#get the 3 states who had the maximum amount of daily confirmed
+max_state_in_poll <- wiki_confirmed %>% filter(Date_Date < "2020-04-04")
+newdata <-summarize(max_state_in_poll$amount,max_state_in_poll$state,max)
+newdata1 <- newdata[order(-newdata$`max_state_in_poll$amount`),]
+newdata1 <- newdata1 %>% rename("state" = "max_state_in_poll$state","amount" = "max_state_in_poll$amount")
+
+head(newdata1,3)
+```
+
+
+
+*Explanation:we can see that those 3 states are Pennsylvania, New York and Mississippi. those 3 states are democrats and its can really explain the sharp rise at the democrats confirmed patients in the plot above.*
+
+1.  In Israel the panic started when the number of daily patients crossed the 1000 patients, lets see if US had the same affect:
+
+```{r,include=FALSE}
+#extract the state who had the max number of confirmed patients between the dates of the civiq poll
+over_1k <- wiki_summary %>% filter(Confirmed_Daily > 1000)
+over_1k <- over_1k[order(as.Date(over_1k$Date_Date, format="%d/%m/%Y")),]
+over_1k[1,]
+
+```
+
+```{r, echo=FALSE}
+
+concern_over_1k <- civiqs_poll %>%
+  select(date, rep, dem) %>%
+  filter(date>="2020-03-17"& date<= "2020-04-05")%>%
+  gather(key = "political_Group", value = "Value", -date)
+`Political Group`<-factor(dem_vs_rep$`political_Group`,labels = c("Democrats","Republicans"))
+
+
+g8<-ggplot(concern_over_1k, aes(x = date, y = Value)) + 
+  geom_line(aes(color = `political_Group`),size = 1.1) + 
+  scale_color_manual(values = c("#2166ac","#b2182b"))+labs(x = "Date",y = "Level of concern",
+title = "Level of concern among republicans and democrats"
+)+scale_x_date(date_labels="%d %b",date_breaks  ="2 day")
+
+g8
+```
+
+
+*Explanation:We wanted to see if the number of confirmed patients affected the concern of the citizens. we checked when the number of daily confirmed patients crossed the 1000 patient - found it was on March 17. We can see from the plot that around those dates the concern has increased especially at the republican who were not concerned at all, their concern raised from negative to positive only a few days after the patients number crossed the 1000.*
+
+```{r,include=FALSE}
+#which state had the highest number of confirmed patients that day
+max_state_on_date <- wiki_confirmed %>% filter(Date_Date == "2020-03-17")
+df <-summarize(max_state_on_date$amount,max_state_on_date$state,max)
+df1 <- df[order(-df$`max_state_on_date$amount`),]
+df1 <- df1 %>% rename("state" = "max_state_on_date$state","amount" = "max_state_on_date$amount")
+
+```
+
+which state had the highest number of confirmed patients that day
+
+```{r echo=FALSE}
+head(df1,3)
+```
+
+*Explanation:we saw that on March 17 when the total daily confirmed patients number went above the 1000 patients , the republicans are starting become more concerned. we can see that on that on this date the 3 states who has the highest of confirmed patients are Pennsylvania,Wyoming and New York. Wyoming is the only republican state from those 3 which can explain the rise at their concern. Another interesting thing we found is that above its hard hit from covid Pennsylvania was known as a state who had a lot of young covid patients, this information can affect the concern of the USA citizens.\
+*
+
+2.we can look at this from the other direction, we can see that the Republican concern has gone from negative to positive on March 21, lets take a look what happened on that date in covid cases:\
+
+```{r,warning=FALSE, echo=FALSE}
+
+covid_on_date <- wiki_confirmed %>% filter(Date_Date == "2020-03-21")
+covid_on_date <- covid_on_date %>% select(state,amount)
+covid_on_date <- inner_join(covid_on_date,e1,by = c("state" = "short_state"))
+covid_on_date$State <- tolower(covid_on_date$State)
+us_states$amount <- covid_on_date$amount[match(us_states$region,covid_on_date$State)]
+
+g9 <- ggplot(data = us_states,mapping = aes(x = long, y = lat,group = group, fill = political)) + geom_polygon(color = "gray90", size = 0.1) +
+    coord_map(projection = "albers", lat0 = 39, lat1 = 45) + scale_fill_manual(values = c("#2166ac","#c01d31")) +labs(title = "States vs. amount of confirmed patients on March 21,2020 ", fill = NULL)+geom_point(data=us_states, aes(x=long, y=lat, size = amount), 
+            color = "#D2B48C", alpha = 0.2) + scale_size(name="amount")
+g9
+
+```
+
+
+
+*Explanation:We wanted to see if the sudden increase in the republicans concern was affected by the amount of confirmed patients in the states where the republicans are the majority. we checked the amount of each state on March 21.In this plot the color of the state represents the political party and the circles are representing the amount of confirmed patients sized by the amount. We can see from the plot something very surprising - the republican states has lower amount than that of the democrats states. a possible explanation for this is that the pandemic began in New York which as we can see is almost covered entirely with circles. it was only after the poll was taken that the pandemic was spread all over the USA.\
+*
+
+3.explore the difference the the level of concern over time:
+**note - as explained before - the diff value in the poll data set represents the daily difference between the republicans concern and the democrats concern.
+
+```{r, echo=FALSE}
+g10<-ggplot(civiqs_poll, aes(x = date, y = diff)) + 
+  geom_line(color="#AC79AA",size = 1.1)+labs(
+x = NULL,
+y = "Difference",
+title = "The Difference In The Level Of Concern Over Time "
+)+scale_x_date(date_breaks = "1 weeks");
+
+g10
+```
+
+
+
+we can see that the highest difference is at March 9, lets take a look what happens in terms of confirmed patients :
+
+```{r, echo=FALSE}
+max_state_on_diff <- wiki_confirmed %>% filter(Date_Date == "2020-03-09")
+max_diff<-summarize(max_state_on_diff$amount,max_state_on_diff$state,max)
+diff1 <- max_diff[order(-max_diff$`max_state_on_diff$amount`),]
+diff1 <- diff1 %>% rename("state" = "max_state_on_diff$state","amount" = "max_state_on_diff$amount")
+
+head(diff1,3)
+```
+
+
+
+*Explanation:We wanted to see if the maximum difference in the concern was affected by the amount of confirmed patients. we checked the amount of each state on March 9.we can see that the 3 states who has the highest amount are Pennsylvania,Wyoming and California. as we saw before Pennsylvania is democratic state while Wyoming and California are republicans.*
+
+```{r, echo=FALSE}
+stat_on_diff <- wiki_summary %>% filter(Date_Date == "2020-03-09")
+max_conf <- stat_on_diff[which.max(stat_on_diff$Confirmed_Daily), ]
+max_conf <- max_conf %>% select(Confirmed_Daily,Deaths_Daily,Recovered_Daily)
+
+
+max_conf
+```
+
+
+
+*Explanation:We wanted to see if the maximum difference in the concern was affected by the amount of confirmed deaths and recovered patients. we checked the amount of each state on March 9. Another interesting about this date which can affect the concern of the USA citizens is that on that date the stock market crashed*
